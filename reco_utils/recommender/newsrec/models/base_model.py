@@ -1,14 +1,15 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
-from os.path import join
 import abc
 import time
+
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from reco_utils.recommender.deeprec.deeprec_utils import cal_metric
 from tqdm import tqdm
+
+from reco_utils.recommender.deeprec.deeprec_utils import cal_metric
 
 __all__ = ["BaseModel"]
 
@@ -25,7 +26,7 @@ class BaseModel:
     """
 
     def __init__(
-        self, hparams, iterator_creator, seed=None,
+            self, hparams, iterator_creator, seed=None,
     ):
         """Initializing the model. Create common logics which are needed by all deeprec models, such as loss function, 
         parameter set.
@@ -44,7 +45,7 @@ class BaseModel:
         self.train_iterator = iterator_creator(
             hparams, hparams.npratio, col_spliter="\t",
         )
-        self.test_iterator = iterator_creator(hparams, col_spliter="\t",)
+        self.test_iterator = iterator_creator(hparams, col_spliter="\t", )
 
         self.hparams = hparams
         self.support_quick_scoring = hparams.support_quick_scoring
@@ -163,13 +164,13 @@ class BaseModel:
         return pred_rslt, eval_label, imp_index
 
     def fit(
-        self,
-        train_news_file,
-        train_behaviors_file,
-        valid_news_file,
-        valid_behaviors_file,
-        test_news_file=None,
-        test_behaviors_file=None,
+            self,
+            train_news_file,
+            train_behaviors_file,
+            valid_news_file,
+            valid_behaviors_file,
+            test_news_file=None,
+            test_behaviors_file=None,
     ):
         """Fit the model with train_file. Evaluate the model on valid_file per epoch to observe the training status.
         If test_news_file is not None, evaluate it too.
@@ -331,14 +332,14 @@ class BaseModel:
 
         return news_index, news_vec
 
-    def run_user(self, news_filename, behaviors_file):
+    def run_user(self, news_filename, behaviors_file,test):
         if not hasattr(self, "userencoder"):
             raise ValueError("model must have attribute userencoder")
 
         user_indexes = []
         user_vecs = []
         for batch_data_input in tqdm(
-            self.test_iterator.load_user_from_file(news_filename, behaviors_file)
+                self.test_iterator.load_user_from_file(news_filename, behaviors_file,test)
         ):
             user_index, user_vec = self.user(batch_data_input)
             user_indexes.extend(np.reshape(user_index, -1))
@@ -353,7 +354,7 @@ class BaseModel:
         news_indexes = []
         news_vecs = []
         for batch_data_input in tqdm(
-            self.test_iterator.load_news_from_file(news_filename)
+                self.test_iterator.load_news_from_file(news_filename)
         ):
             news_index, news_vec = self.news(batch_data_input)
             news_indexes.extend(np.reshape(news_index, -1))
@@ -367,7 +368,7 @@ class BaseModel:
         imp_indexes = []
 
         for batch_data_input in tqdm(
-            self.test_iterator.load_data_from_file(news_filename, behaviors_file)
+                self.test_iterator.load_data_from_file(news_filename, behaviors_file)
         ):
             step_pred, step_labels, step_imp_index = self.eval(batch_data_input)
             preds.extend(np.reshape(step_pred, -1))
@@ -379,9 +380,9 @@ class BaseModel:
         )
         return group_impr_indexes, group_labels, group_preds
 
-    def run_fast_eval(self, news_filename, behaviors_file):
+    def run_fast_eval(self, news_filename, behaviors_file, test=0):
         news_vecs = self.run_news(news_filename)
-        user_vecs = self.run_user(news_filename, behaviors_file)
+        user_vecs = self.run_user(news_filename, behaviors_file,test)
 
         self.news_vecs = news_vecs
         self.user_vecs = user_vecs
@@ -389,9 +390,8 @@ class BaseModel:
         group_impr_indexes = []
         group_labels = []
         group_preds = []
-
         for (impr_index, news_index, user_index, label,) in tqdm(
-            self.test_iterator.load_impression_from_file(behaviors_file)
+                self.test_iterator.load_impression_from_file(behaviors_file, test)
         ):
             pred = np.dot(
                 np.stack([news_vecs[i] for i in news_index], axis=0),

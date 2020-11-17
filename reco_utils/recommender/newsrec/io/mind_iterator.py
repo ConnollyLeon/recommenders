@@ -1,9 +1,10 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
-import tensorflow as tf
-import numpy as np
 import pickle
+
+import numpy as np
+import tensorflow as tf
 
 from reco_utils.recommender.deeprec.io.iterator import BaseIterator
 from reco_utils.recommender.newsrec.newsrec_utils import word_tokenize, newsample
@@ -30,7 +31,7 @@ class MINDIterator(BaseIterator):
     """
 
     def __init__(
-        self, hparams, npratio=-1, col_spliter="\t", ID_spliter="%",
+            self, hparams, npratio=-1, col_spliter="\t", ID_spliter="%",
     ):
         """Initialize an iterator. Create necessary placeholders for the model.
         
@@ -95,7 +96,7 @@ class MINDIterator(BaseIterator):
                         title[word_index].lower()
                     ]
 
-    def init_behaviors(self, behaviors_file):
+    def init_behaviors(self, behaviors_file, test=False):
         """ init behavior logs given behaviors file.
 
         Args:
@@ -114,11 +115,14 @@ class MINDIterator(BaseIterator):
 
                 history = [self.nid2index[i] for i in history.split()]
                 history = [0] * (self.his_size - len(history)) + history[
-                    : self.his_size
-                ]
+                                                                 : self.his_size
+                                                                 ]
 
                 impr_news = [self.nid2index[i.split("-")[0]] for i in impr.split()]
-                label = [int(i.split("-")[1]) for i in impr.split()]
+                if not test:
+                    label = [int(i.split("-")[1]) for i in impr.split()]
+                else:
+                    label = [1 for i in impr.split()]
                 uindex = self.uid2index[uid] if uid in self.uid2index else 0
 
                 self.histories.append(history)
@@ -226,11 +230,11 @@ class MINDIterator(BaseIterator):
 
         for index in indexes:
             for (
-                label,
-                imp_index,
-                user_index,
-                candidate_title_index,
-                click_title_index,
+                    label,
+                    imp_index,
+                    user_index,
+                    candidate_title_index,
+                    click_title_index,
             ) in self.parser_one_line(index):
                 candidate_title_indexes.append(candidate_title_index)
                 click_title_indexes.append(click_title_index)
@@ -264,12 +268,12 @@ class MINDIterator(BaseIterator):
             )
 
     def _convert_data(
-        self,
-        label_list,
-        imp_indexes,
-        user_indexes,
-        candidate_title_indexes,
-        click_title_indexes,
+            self,
+            label_list,
+            imp_indexes,
+            user_indexes,
+            candidate_title_indexes,
+            click_title_indexes,
     ):
         """Convert data into numpy arrays that are good for further model operation.
         
@@ -299,7 +303,7 @@ class MINDIterator(BaseIterator):
             "labels": labels,
         }
 
-    def load_user_from_file(self, news_file, behavior_file):
+    def load_user_from_file(self, news_file, behavior_file,test):
         """Read and parse user data from news file and behavior file.
         
         Args:
@@ -314,7 +318,7 @@ class MINDIterator(BaseIterator):
             self.init_news(news_file)
 
         if not hasattr(self, "impr_indexes"):
-            self.init_behaviors(behavior_file)
+            self.init_behaviors(behavior_file,test)
 
         user_indexes = []
         impr_indexes = []
@@ -342,7 +346,7 @@ class MINDIterator(BaseIterator):
             )
 
     def _convert_user_data(
-        self, user_indexes, impr_indexes, click_title_indexes,
+            self, user_indexes, impr_indexes, click_title_indexes,
     ):
         """Convert data into numpy arrays that are good for further model operation.
         
@@ -399,7 +403,7 @@ class MINDIterator(BaseIterator):
             )
 
     def _convert_news_data(
-        self, news_indexes, candidate_title_indexes,
+            self, news_indexes, candidate_title_indexes,
     ):
         """Convert data into numpy arrays that are good for further model operation.
         
@@ -421,7 +425,7 @@ class MINDIterator(BaseIterator):
             "candidate_title_batch": candidate_title_index_batch,
         }
 
-    def load_impression_from_file(self, behaivors_file):
+    def load_impression_from_file(self, behaivors_file, test=0):
         """Read and parse impression data from behaivors file.
         
         Args:
@@ -430,9 +434,34 @@ class MINDIterator(BaseIterator):
         Returns:
             obj: An iterator that will yields parsed impression data, in the format of dict.
         """
+        if not test:
+            if not hasattr(self, "histories"):
+                self.init_behaviors(behaivors_file)
+        else:
+            self.histories = []
+            self.imprs = []
+            self.labels = []
+            self.impr_indexes = []
+            self.uindexes = []
 
-        if not hasattr(self, "histories"):
-            self.init_behaviors(behaivors_file)
+            with tf.io.gfile.GFile(behaivors_file, "r") as rd:
+                impr_index = 0
+                for line in rd:
+                    uid, time, history, impr = line.strip("\n").split(self.col_spliter)[-4:]
+
+                    history = [self.nid2index[i] for i in history.split()]
+                    history = [0] * (self.his_size - len(history)) + history[
+                                                                     : self.his_size
+                                                                     ]
+
+                    impr_news = [self.nid2index[i.split("-")[0]] for i in impr.split()]
+                    uindex = self.uid2index[uid] if uid in self.uid2index else 0
+                    self.histories.append(history)
+                    self.imprs.append(impr_news)
+                    self.labels.append([1 for i in impr.split()])
+                    self.impr_indexes.append(impr_index)
+                    self.uindexes.append(uindex)
+                    impr_index += 1
 
         indexes = np.arange(len(self.labels))
 
@@ -446,4 +475,3 @@ class MINDIterator(BaseIterator):
                 self.uindexes[index],
                 impr_label,
             )
-

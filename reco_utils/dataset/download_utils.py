@@ -93,5 +93,5 @@ def unzip_file(zip_src, dst_dir, clean_zip_file=True):
     fz = zipfile.ZipFile(zip_src, "r")
     for file in fz.namelist():
         fz.extract(file, dst_dir)
-    if clean_zip_file:
-        os.remove(zip_src)
+    # if clean_zip_file:
+    #     os.remove(zip_src)
