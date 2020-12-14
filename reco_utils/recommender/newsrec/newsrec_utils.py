@@ -2,29 +2,15 @@
 # Licensed under the MIT License.
 
 
+import random
+import re
+
 import tensorflow as tf
-import six
-import os
-from sklearn.metrics import (
-    roc_auc_score,
-    log_loss,
-    mean_squared_error,
-    accuracy_score,
-    f1_score,
-)
-import numpy as np
-import yaml
-import zipfile
-from reco_utils.dataset.download_utils import maybe_download
+
 from reco_utils.recommender.deeprec.deeprec_utils import (
     flat_config,
     load_yaml,
-    load_dict,
 )
-import json
-import pickle as pkl
-import random
-import re
 
 
 def check_type(config):
@@ -115,6 +101,8 @@ def check_nn_config(f_config):
             "npratio",
             "data_format",
             "word_emb_dim",
+            "entityEmb_file",
+            "contextEmb_file",
             # nrms
             "head_num",
             "head_dim",
@@ -254,6 +242,9 @@ def create_hparams(flags):
         # nrms
         head_num=flags.get("head_num", 4),
         head_dim=flags.get("head_dim", 100),
+        entityEmb_file=flags.get("entityEmb_file", None),
+        entityDict_file=flags.get("entityDict_file",None),
+        contextEmb_file=flags.get("contextEmb_file", None),
         # naml
         cnn_activation=flags.get("cnn_activation", None),
         dense_activation=flags.get("dense_activation", None),
@@ -294,6 +285,7 @@ def prepare_hparams(yaml_file=None, **kwargs):
         config = {}
 
     config.update(kwargs)
+    print(config)
 
     check_nn_config(config)
     return create_hparams(config)
@@ -365,4 +357,3 @@ def get_mind_data_set(type):
             "MINDdemo_dev.zip",
             "MINDdemo_utils.zip",
         )
-

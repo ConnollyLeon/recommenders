@@ -239,6 +239,7 @@ class BaseModel:
                 )
             eval_end = time.time()
             eval_time = eval_end - eval_start
+            self.model.save_weights(f"./my_nrms_ckpt_epoch{epoch}")
 
             if test_news_file is not None:
                 print(
@@ -327,19 +328,21 @@ class BaseModel:
 
     def news(self, batch_news_input):
         news_input = self._get_news_feature_from_iter(batch_news_input)
-        news_vec = self.newsencoder.predict_on_batch(news_input)
+        news_vec = self.newsencoder.predict_on_batch(news_input[0])  # title
+        entity_vec = self.entityencoder.predict_on_batch(news_input[1])
+        context_vec = self.contextencoder.predict_on_batch(news_input[1])
         news_index = batch_news_input["news_index_batch"]
-
+        news_vec = np.concatenate([news_vec, entity_vec, context_vec], -1)
         return news_index, news_vec
 
-    def run_user(self, news_filename, behaviors_file,test):
+    def run_user(self, news_filename, behaviors_file, test):
         if not hasattr(self, "userencoder"):
             raise ValueError("model must have attribute userencoder")
 
         user_indexes = []
         user_vecs = []
         for batch_data_input in tqdm(
-                self.test_iterator.load_user_from_file(news_filename, behaviors_file,test)
+                self.test_iterator.load_user_from_file(news_filename, behaviors_file, test)
         ):
             user_index, user_vec = self.user(batch_data_input)
             user_indexes.extend(np.reshape(user_index, -1))
@@ -382,7 +385,7 @@ class BaseModel:
 
     def run_fast_eval(self, news_filename, behaviors_file, test=0):
         news_vecs = self.run_news(news_filename)
-        user_vecs = self.run_user(news_filename, behaviors_file,test)
+        user_vecs = self.run_user(news_filename, behaviors_file, test)
 
         self.news_vecs = news_vecs
         self.user_vecs = user_vecs
