@@ -1,9 +1,12 @@
 import sys
 
 sys.path.append("../../")
-from reco_utils.recommender.newsrec.newsrec_utils import prepare_hparams
-from reco_utils.recommender.newsrec.models.nrms import NRMSModel
-from reco_utils.recommender.newsrec.io.mind_iterator import MINDIterator
+from .newsrec_utils import prepare_hparams
+from .mind_iterator import MINDIterator
+
+from bert4keras.tokenizers import Tokenizer, load_vocab
+from bert4keras.snippets import DataGenerator, AutoRegressiveDecoder
+from bert4keras.snippets import sequence_padding, open
 import os
 
 print("System version: {}".format(sys.version))
@@ -41,11 +44,80 @@ yaml_file = os.path.join(data_path, "utils", r'nrms.yaml')
 #     download_deeprec_resources(r'https://recodatasets.blob.core.windows.net/newsrec/', \
 #                                os.path.join(data_path, 'utils'), mind_utils)
 #
-hparams = prepare_hparams(yaml_file, wordEmb_file=wordEmb_file, \
-                          wordDict_file=wordDict_file, userDict_file=userDict_file, \
-                          epochs=epochs, entityEmb_file=entity_embedding_file, contextEmb_file=context_embedding_file, \
+
+# bert 基本参数
+maxlen = 256
+batch_size = 16
+epochs = 100
+
+# bert配置
+config_path = '/root/kg/bert/uer/mixed_corpus_bert_base_model/bert_config.json'
+checkpoint_path = '/root/kg/bert/uer/mixed_corpus_bert_base_model/bert_model.ckpt'
+dict_path = '/root/kg/bert/uer/mixed_corpus_bert_base_model/vocab.txt'
+
+token_dict, keep_tokens = load_vocab(
+    dict_path=dict_path,
+    simplified=True,
+    startswith=['[PAD]', '[UNK]', '[CLS]', '[SEP]'],
+)
+tokenizer = Tokenizer(token_dict, do_lower_case=True)
+
+
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+import tensorflow.keras as keras
+from tensorflow.keras import layers
+import numpy as np
+
+from bert4keras.layers import Loss
+from bert4keras.models import build_transformer_model
+from bert4keras.tokenizers import Tokenizer, load_vocab
+from bert4keras.optimizers import Adam
+from bert4keras.snippets import sequence_padding, open
+from bert4keras.snippets import DataGenerator, AutoRegressiveDecoder
+
+from reco_utils.recommender.newsrec.models.base_model import BaseModel
+from reco_utils.recommender.newsrec.models.layers import AttLayer2, SelfAttention
+
+
+
+
+
+class data_generator(DataGenerator):
+    """数据生成器
+    """
+
+    def __iter__(self, random=False):
+        batch_token_ids, batch_segment_ids = [], []
+        for is_end, txt in self.sample(random):
+            text = open(txt, encoding='utf-8').read()
+            text = text.split('\n')
+            if len(text) > 1:
+                title = text[0]
+                content = '\n'.join(text[1:])
+                token_ids, segment_ids = tokenizer.encode(
+                    content, title, maxlen=maxlen
+                )
+                batch_token_ids.append(token_ids)
+                batch_segment_ids.append(segment_ids)
+            if len(batch_token_ids) == self.batch_size or is_end:
+                batch_token_ids = sequence_padding(batch_token_ids)
+                batch_segment_ids = sequence_padding(batch_segment_ids)
+                yield [batch_token_ids, batch_segment_ids], None
+                batch_token_ids, batch_segment_ids = [], []
+
+
+hparams = prepare_hparams(yaml_file, wordEmb_file=wordEmb_file, wordDict_file=wordDict_file,
+                          userDict_file=userDict_file, epochs=epochs, entityEmb_file=entity_embedding_file,
+                          contextEmb_file=context_embedding_file,
                           entityDict_file=entityDict_file,
-                          show_step=10)
+                          show_step=10,
+                          # BERT
+                          use_bert=True,
+                          bert_config_path=config_path,
+                          bert_checkpoint_path=checkpoint_path,
+                          )
 print(hparams)
 
 iterator = MINDIterator
