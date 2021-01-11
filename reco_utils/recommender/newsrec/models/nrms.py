@@ -3,6 +3,7 @@
 
 import tensorflow.keras as keras
 from tensorflow.keras import layers
+import numpy as np
 
 from reco_utils.recommender.newsrec.models.base_model import BaseModel
 from reco_utils.recommender.newsrec.models.layers import AttLayer2, SelfAttention
@@ -169,6 +170,19 @@ class NRMSModel(BaseModel):
         model = keras.Model(sequences_input_title, pred_title, name=name)
         return model
 
+    def news(self, batch_news_input):
+        news_input = self._get_news_feature_from_iter(batch_news_input)
+        news_vec = self.newsencoder.predict_on_batch(news_input[0])  # title
+        if self.entityencoder:
+            entity_vec = self.entityencoder.predict_on_batch(news_input[1])
+            news_vec = np.concatenate([news_vec, entity_vec], -1)
+            if self.contextencoder:
+                context_vec = self.contextencoder.predict_on_batch(news_input[1])
+                news_vec = np.concatenate([news_vec, context_vec], -1)
+        news_index = batch_news_input["news_index_batch"]
+        # news_vec = np.concatenate([news_vec, entity_vec, context_vec], -1)
+        return news_index, news_vec
+
     def _build_nrms(self):
         """The main function to create NRMS's logic. The core of NRMS
         is a user encoder and a news encoder.
@@ -250,13 +264,17 @@ class NRMSModel(BaseModel):
             news_present = layers.TimeDistributed(self.newsencoder)(pred_input_title)
             news_present_one = self.newsencoder(pred_title_one_reshape)
             news_entity_present = layers.TimeDistributed(self.entityencoder)(pred_input_title_entity)
-            news_context_present = layers.TimeDistributed(self.contextencoder)(pred_input_title_entity)
             news_entity_present_one = self.entityencoder(pred_title_one_reshape_entity)
-            news_context_present_one = self.contextencoder(pred_title_one_reshape_entity)
-            news_present = layers.Concatenate()([news_present, news_entity_present, news_context_present])
-            news_present_one = layers.Concatenate()(
-                [news_present_one, news_entity_present_one, news_context_present_one])
-
+            if hparams.contextEmb_file is not None:
+                news_context_present = layers.TimeDistributed(self.contextencoder)(pred_input_title_entity)
+                news_context_present_one = self.contextencoder(pred_title_one_reshape_entity)
+                news_present = layers.Concatenate()([news_present, news_entity_present, news_context_present])
+                news_present_one = layers.Concatenate()(
+                    [news_present_one, news_entity_present_one, news_context_present_one])
+            else:
+                news_present = layers.Concatenate()([news_present, news_entity_present])
+                news_present_one = layers.Concatenate()(
+                    [news_present_one, news_entity_present_one])
 
         else:
             user_present = self.userencoder(his_input_title)
