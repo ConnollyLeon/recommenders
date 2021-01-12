@@ -7,7 +7,7 @@ import re
 
 import tensorflow as tf
 
-from reco_utils.recommender.deeprec.deeprec_utils import (
+from deeprec_utils import (
     flat_config,
     load_yaml,
 )
@@ -245,6 +245,9 @@ def create_hparams(flags):
         entityEmb_file=flags.get("entityEmb_file", None),
         entityDict_file=flags.get("entityDict_file",None),
         contextEmb_file=flags.get("contextEmb_file", None),
+        use_bert=flags.get('use_bert',False),
+        bert_config_path=flags.get("bert_config_path",None),
+        bert_checkpoint_path=flags.get("bert_checkpoint_path",None),
         # naml
         cnn_activation=flags.get("cnn_activation", None),
         dense_activation=flags.get("dense_activation", None),

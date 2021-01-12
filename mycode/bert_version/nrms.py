@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
-import tensorflow.keras as keras
+from bert4keras.backend import keras
 from tensorflow.keras import layers
 import numpy as np
 
@@ -12,12 +12,13 @@ from bert4keras.optimizers import Adam
 from bert4keras.snippets import sequence_padding, open
 from bert4keras.snippets import DataGenerator, AutoRegressiveDecoder
 
-from reco_utils.recommender.newsrec.models.base_model import BaseModel
-from reco_utils.recommender.newsrec.models.layers import AttLayer2, SelfAttention
+
+from base_model import BaseModel
+from layers import AttLayer2, SelfAttention
 
 __all__ = ["NRMSModel"]
 
-
+print('keras version:', keras.__version__)
 
 
 class NRMSModel(BaseModel):
@@ -46,10 +47,17 @@ class NRMSModel(BaseModel):
             iterator_creator_test(obj): NRMS data loader class for test and validation data
         """
         if hparams.use_bert:
-            model = build_transformer_model(
-                hparams.bert_config_path,
-                hparams.bert_checkpoint_path,
-            )
+
+            from transformers import TFBertModel
+            self.bert_model = TFBertModel.from_pretrained( '/Users/connolly/Documents/Study/Useful dataset/chinese_L-12_H-768_A-12')
+            # self.bert_model = build_transformer_model(
+            #     hparams.bert_config_path,
+            #     hparams.bert_checkpoint_path,
+            #     name='BERT_encoder'
+            # )
+            for i in range(10):
+                self.bert_model.layers[i].trainable = False
+            print(self.bert_model.summary())
         else:
             self.word2vec_embedding = self._init_embedding(hparams.wordEmb_file)
         if hparams.entityEmb_file is not None:
@@ -73,7 +81,9 @@ class NRMSModel(BaseModel):
         """
         input_feat = [
             batch_data["clicked_title_batch"],
+            batch_data["clicked_title_segment_batch"],  # LP add
             batch_data["candidate_title_batch"],
+            batch_data["candidate_title_segment_batch"],  # LP add
             batch_data["clicked_title_entity_batch"],
             batch_data["candidate_title_entity_batch"]
 
@@ -91,6 +101,7 @@ class NRMSModel(BaseModel):
         """
         input_feat = [
             batch_data["clicked_title_batch"],
+            batch_data["clicked_title_segment_batch"],
             batch_data["clicked_title_entity_batch"]
         ]
         return input_feat
@@ -105,6 +116,7 @@ class NRMSModel(BaseModel):
         """
         input_feat = [
             batch_data["candidate_title_batch"],
+            batch_data["candidate_title_segment_batch"],
             batch_data["candidate_title_entity_batch"]
         ]
 
@@ -117,7 +129,6 @@ class NRMSModel(BaseModel):
             obj: a model used to train.
             obj: a model used to evaluate and inference.
         """
-        hparams = self.hparams
         model, scorer = self._build_nrms()
         return model, scorer
 
@@ -132,14 +143,36 @@ class NRMSModel(BaseModel):
         """
         hparams = self.hparams
         his_input_title = keras.Input(
-            shape=(hparams.his_size, hparams.title_size), dtype="int32"
+            shape=(hparams.his_size, hparams.title_size), dtype="int32", name='ue_his_input_title'
         )
-        click_title_presents = layers.TimeDistributed(titleencoder, name='news_time_distributed')(his_input_title)
+
+        his_input_segment = keras.Input(
+            shape=(hparams.his_size, hparams.title_size), dtype="int32", name='ue_his_input_segment'
+        )
+        print(his_input_segment.shape)
+        his_input_title_reshape = keras.layers.Reshape(
+            (hparams.his_size * hparams.title_size,), name='ue_his_input_title_reshape'
+        )(his_input_title)
+        his_input_segment_reshape = keras.layers.Reshape(
+            (hparams.his_size * hparams.title_size,), name='ue_his_input_segment_reshape'
+        )(his_input_segment)
+        print(his_input_segment.shape)
+        embedded_sequences_title = self.bert_model(
+            [his_input_title_reshape, his_input_segment_reshape])  # TODO shape可能有问题 (-1, 50,30,768)
+
+        embedded_sequences_title = keras.layers.Reshape((hparams.his_size, hparams.title_size, 768),
+                                                        name='embedded_sequences_title_reshape')(
+            embedded_sequences_title)
+
+        click_title_presents = layers.TimeDistributed(titleencoder,
+                                                      name='news_time_distributed')(embedded_sequences_title)
+
         y = SelfAttention(hparams.head_num, hparams.head_dim, seed=self.seed)(
             [click_title_presents] * 3
         )
         if entityencoder is not None:
-            his_input_title_entity = keras.Input(shape=(hparams.his_size, hparams.title_size), dtype="int32")
+            his_input_title_entity = keras.Input(shape=(hparams.his_size, hparams.title_size), dtype="int32",
+                                                 name='his_input_title_entity')
             click_title_entity_presents = layers.TimeDistributed(entityencoder, name='entity_time_distributed')(
                 his_input_title_entity)
             entity_y = SelfAttention(hparams.head_num, hparams.head_dim, seed=self.seed)(
@@ -157,24 +190,52 @@ class NRMSModel(BaseModel):
 
         user_present = AttLayer2(hparams.attention_hidden_dim, seed=self.seed)(y)
         if entityencoder is not None:
-            model = keras.Model(inputs=[his_input_title, his_input_title_entity], outputs=user_present,
+            model = keras.Model(inputs=[his_input_title, his_input_segment, his_input_title_entity],
+                                outputs=user_present,
                                 name="user_encoder")
         else:
-            model = keras.Model(his_input_title, user_present, name="user_encoder")
+            model = keras.Model([his_input_title, his_input_segment], user_present, name="user_encoder")
         return model
 
-    def _build_newsencoder(self, embedding_layer, name):
+    def _build_newsencoder(self, name):
         """The main function to create news encoder of NRMS.
 
         Args:
-            embedding_layer(obj): a word embedding layer.
+            bert_model(obj): a bert model. # LP modified
 
         Return:
             obj: the news encoder of NRMS.
         """
         hparams = self.hparams
-        sequences_input_title = keras.Input(shape=(hparams.title_size,), dtype="int32")
-        embedded_sequences_title = embedding_layer(sequences_input_title)
+        # sequences_input_title = keras.Input(shape=(hparams.title_size,), dtype="int32", name='sequences_input_title')
+        # sequences_input_segment = keras.Input(shape=(hparams.title_size,), dtype="int32",
+        #                                       name='sequences_input_segment')
+        # embedded_sequences_title = bert_model([sequences_input_title, sequences_input_segment])  # TODO shape可能有问题
+        embedded_sequences_title = keras.Input(shape=(hparams.title_size, 768),
+                                               name='embedded_sequences_title')  # TODO shape可能有问题 (?, 30, 768)
+
+        y = layers.Dropout(hparams.dropout)(embedded_sequences_title)
+        y = SelfAttention(hparams.head_num, hparams.head_dim, seed=self.seed)(
+            [y, y, y])  # shape: (-1, 5, 30, 400)
+        y = layers.Dropout(hparams.dropout)(y)
+
+        pred_title = AttLayer2(hparams.attention_hidden_dim, seed=self.seed)(y)  # shape: (?,5, 400) or (?, 400)
+
+        model = keras.Model([embedded_sequences_title], pred_title, name=name)
+        return model
+
+    def _build_eneityencoder(self, embedding_layer, name):
+        """The main function to create news encoder of NRMS.
+
+        Args:
+            embedding_layer(obj): embedding layer. # LP modified
+
+        Return:
+            obj: the news encoder of NRMS.
+        """
+        hparams = self.hparams
+        sequences_input_title = keras.Input(shape=(hparams.title_size,), dtype="int32", name='sequences_input_title')
+        embedded_sequences_title = embedding_layer(sequences_input_title)  # TODO shape可能有问题
 
         y = layers.Dropout(hparams.dropout)(embedded_sequences_title)
         y = SelfAttention(hparams.head_num, hparams.head_dim, seed=self.seed)([y, y, y])
@@ -211,22 +272,46 @@ class NRMSModel(BaseModel):
         his_input_title = keras.Input(
             shape=(hparams.his_size, hparams.title_size), dtype="int32", name='his_input_title'
         )
+
+        his_input_segment = keras.Input(
+            shape=(hparams.his_size, hparams.title_size), dtype="int32", name="his_input_segment"  # LP add
+        )
         pred_input_title = keras.Input(
             shape=(hparams.npratio + 1, hparams.title_size), dtype="int32", name='pred_input_title'
         )
-        pred_input_title_one = keras.Input(
-            shape=(1, hparams.title_size,), dtype="int32", name='pred_input_title_one'
-        )
-        pred_title_one_reshape = layers.Reshape((hparams.title_size,))(
-            pred_input_title_one
+        pred_input_segment = keras.Input(
+            shape=(hparams.npratio + 1, hparams.title_size), dtype="int32", name='pred_input_segment'
         )
 
-        embedding_layer = layers.Embedding(
-            self.word2vec_embedding.shape[0],
-            hparams.word_emb_dim,
-            weights=[self.word2vec_embedding],
-            trainable=True,
+        # Reshape for bert-use
+
+        pred_input_segment_reshape = keras.layers.Reshape(((hparams.npratio + 1) * hparams.title_size,))(pred_input_segment)
+        pred_input_title_reshape = keras.layers.Reshape(((hparams.npratio + 1) * hparams.title_size,))(pred_input_title)
+
+        pred_input_title_one = keras.Input(
+            shape=(1, hparams.title_size), dtype="int32", name='pred_input_title_one'
         )
+
+        pred_title_one_reshape = layers.Reshape((hparams.title_size,),
+                                                name='pred_title_one_reshape')(pred_input_title_one)
+
+        pred_input_title_segment_one = keras.Input(
+            shape=(1, hparams.title_size), dtype="int32", name='pred_input_title_segment_one'  # LP add
+        )
+
+        pred_title_segment_one_reshape = layers.Reshape((hparams.title_size,),
+                                                        name='pred_title_segment_one_reshape')(
+            pred_input_title_segment_one)  # LP add
+
+        # embedding_layer = layers.Embedding(
+        #     self.word2vec_embedding.shape[0],
+        #     hparams.word_emb_dim,
+        #     weights=[self.word2vec_embedding],
+        #     trainable=True,
+        # )
+
+        # use bert_model 来代替 word embedding
+
         entity_embedding_layer = None
         context_embedding_layer = None
         if hparams.entityEmb_file is not None:
@@ -236,12 +321,13 @@ class NRMSModel(BaseModel):
             pred_input_title_entity = keras.Input(
                 shape=(hparams.npratio + 1, hparams.title_size), dtype="int32", name='pred_input_title_entity'
             )
+
             pred_input_title_one_entity = keras.Input(
                 shape=(1, hparams.title_size,), dtype="int32", name='pred_input_title_one_entity'
             )
-            pred_title_one_reshape_entity = layers.Reshape((hparams.title_size,))(
-                pred_input_title_one_entity
-            )
+            pred_title_one_reshape_entity = layers.Reshape((hparams.title_size,),
+                                                           name='pred_title_one_reshape_entity')(
+                pred_input_title_one_entity)
             entity_embedding_layer = layers.Embedding(
                 self.entity2vec_embedding.shape[0],
                 self.entity2vec_embedding.shape[1],
@@ -259,25 +345,37 @@ class NRMSModel(BaseModel):
                     name='context_embedding_layer'
                 )
 
-        titleencoder = self._build_newsencoder(embedding_layer, 'news_encoder')
+        titleencoder = self._build_newsencoder('news_encoder')
         if hparams.entityEmb_file:
-            entity_encoder = self._build_newsencoder(entity_embedding_layer, 'entity_encoder')
+            entity_encoder = self._build_eneityencoder(entity_embedding_layer, 'entity_encoder')
             if hparams.contextEmb_file:
-                context_encoder = self._build_newsencoder(context_embedding_layer, 'context_encoder')
+                context_encoder = self._build_eneityencoder(context_embedding_layer, 'context_encoder')
             else:
                 context_encoder = None
         else:
             entity_encoder = None
             context_encoder = None
         self.userencoder = self._build_userencoder(titleencoder, entity_encoder, context_encoder)
+        # from tensorflow.keras.utils import plot_model
+        # plot_model(self.userencoder, to_file='userencoder_model.png',show_shapes=True,show_layer_names=True)
+
         self.newsencoder = titleencoder
         self.entityencoder = entity_encoder
         self.contextencoder = context_encoder
 
         if hparams.entityEmb_file is not None:
-            user_present = self.userencoder([his_input_title, his_input_title_entity])
-            news_present = layers.TimeDistributed(self.newsencoder)(pred_input_title)
-            news_present_one = self.newsencoder(pred_title_one_reshape)
+            user_present = self.userencoder([his_input_title, his_input_segment, his_input_title_entity])
+
+            pred_input_title_emb = self.bert_model([pred_input_title_reshape, pred_input_segment_reshape])  # TODO shape可能有问题
+
+            pred_input_title_emb = keras.layers.Reshape((hparams.npratio + 1, hparams.title_size, 768))(
+                pred_input_title_emb)
+
+            news_present = layers.TimeDistributed(self.newsencoder)(pred_input_title_emb)
+            pred_input_title_one_emb = self.bert_model(
+                [pred_title_one_reshape, pred_title_segment_one_reshape])  # TODO shape可能有问题
+
+            news_present_one = self.newsencoder(pred_input_title_one_emb)
             news_entity_present = layers.TimeDistributed(self.entityencoder)(pred_input_title_entity)
             news_entity_present_one = self.entityencoder(pred_title_one_reshape_entity)
             if hparams.contextEmb_file is not None:
@@ -292,22 +390,37 @@ class NRMSModel(BaseModel):
                     [news_present_one, news_entity_present_one])
 
         else:
-            user_present = self.userencoder(his_input_title)
-            news_present = layers.TimeDistributed(self.newsencoder)(pred_input_title)
-            news_present_one = self.newsencoder(pred_title_one_reshape)
+            user_present = self.userencoder([his_input_title, his_input_segment])
 
-        preds = layers.Dot(axes=-1)([news_present, user_present])
-        preds = layers.Activation(activation="softmax")(preds)
+            pred_input_title_emb = self.bert_model(
+                [pred_input_title_reshape, pred_input_segment_reshape])  # TODO shape可能有问题 shape:(-1,5,30, 768)
+            # Reshape after bert
+            pred_input_title_emb = keras.layers.Reshape((hparams.npratio + 1, hparams.title_size, 768))(
+                pred_input_title_emb)
+            news_present = layers.TimeDistributed(self.newsencoder)(pred_input_title_emb)  # (-1, 5, 400)
 
+            print(news_present.shape)
+            pred_input_title_one_emb = self.bert_model(
+                [pred_title_one_reshape, pred_title_segment_one_reshape])  # shape: (1,768)
+            news_present_one = self.newsencoder(pred_input_title_one_emb)  # (-1,400)
+
+        preds = layers.Dot(axes=-1)([news_present, user_present])  # shape: (-1, 5)
+        preds = layers.Activation(activation="softmax")(preds)  # shape: (-1, 5)
         pred_one = layers.Dot(axes=-1)([news_present_one, user_present])
         pred_one = layers.Activation(activation="sigmoid")(pred_one)
+
         if hparams.entityEmb_file is not None:
-            model = keras.Model([his_input_title, pred_input_title, his_input_title_entity, pred_input_title_entity],
-                                preds)
+            model = keras.Model([his_input_title, his_input_segment, pred_input_title, pred_input_segment,
+                                     his_input_title_entity, pred_input_title_entity],
+                                    preds, name='NRMS')
             scorer = keras.Model(
-                [his_input_title, pred_input_title_one, his_input_title_entity, pred_input_title_one_entity], pred_one)
+                [his_input_title, his_input_segment, pred_input_title_one, pred_input_title_segment_one,
+                 his_input_title_entity, pred_input_title_one_entity], pred_one, name='scorer')
         else:
-            model = keras.Model([his_input_title, pred_input_title], preds)
-            scorer = keras.Model([his_input_title, pred_input_title_one], pred_one)
+            model = keras.Model([his_input_title, his_input_segment, pred_input_title, pred_input_segment], preds,
+                                name='NRMS')
+            scorer = keras.Model(
+                [his_input_title, his_input_segment, pred_input_title_one, pred_input_title_segment_one],
+                pred_one, name='scorer')
 
         return model, scorer

@@ -1,12 +1,13 @@
 import sys
 
-sys.path.append("../../")
-from .newsrec_utils import prepare_hparams
-from .mind_iterator import MINDIterator
+from nrms import NRMSModel
+
+from newsrec_utils import prepare_hparams
+from mind_iterator import MINDIterator
 
 from bert4keras.tokenizers import Tokenizer, load_vocab
 from bert4keras.snippets import DataGenerator, AutoRegressiveDecoder
-from bert4keras.snippets import sequence_padding, open
+from bert4keras.snippets import sequence_padding
 import os
 
 print("System version: {}".format(sys.version))
@@ -15,8 +16,8 @@ epochs = 8
 seed = 42
 MIND_type = 'large'
 
-data_path = './'
-
+# data_path = '/home/laizhiquan/dat01/lpeng/rec/recommenders-master/mycode/large'
+data_path = '../'
 train_news_file = os.path.join(data_path, 'train', r'news.tsv')
 train_behaviors_file = os.path.join(data_path, 'train', r'behaviors.tsv')
 valid_news_file = os.path.join(data_path, 'valid', r'news.tsv')
@@ -45,67 +46,14 @@ yaml_file = os.path.join(data_path, "utils", r'nrms.yaml')
 #                                os.path.join(data_path, 'utils'), mind_utils)
 #
 
-# bert 基本参数
-maxlen = 256
-batch_size = 16
-epochs = 100
 
 # bert配置
-config_path = '/root/kg/bert/uer/mixed_corpus_bert_base_model/bert_config.json'
-checkpoint_path = '/root/kg/bert/uer/mixed_corpus_bert_base_model/bert_model.ckpt'
-dict_path = '/root/kg/bert/uer/mixed_corpus_bert_base_model/vocab.txt'
-
-token_dict, keep_tokens = load_vocab(
-    dict_path=dict_path,
-    simplified=True,
-    startswith=['[PAD]', '[UNK]', '[CLS]', '[SEP]'],
-)
-tokenizer = Tokenizer(token_dict, do_lower_case=True)
-
-
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
-
-import tensorflow.keras as keras
-from tensorflow.keras import layers
-import numpy as np
-
-from bert4keras.layers import Loss
-from bert4keras.models import build_transformer_model
-from bert4keras.tokenizers import Tokenizer, load_vocab
-from bert4keras.optimizers import Adam
-from bert4keras.snippets import sequence_padding, open
-from bert4keras.snippets import DataGenerator, AutoRegressiveDecoder
-
-from reco_utils.recommender.newsrec.models.base_model import BaseModel
-from reco_utils.recommender.newsrec.models.layers import AttLayer2, SelfAttention
-
-
-
-
-
-class data_generator(DataGenerator):
-    """数据生成器
-    """
-
-    def __iter__(self, random=False):
-        batch_token_ids, batch_segment_ids = [], []
-        for is_end, txt in self.sample(random):
-            text = open(txt, encoding='utf-8').read()
-            text = text.split('\n')
-            if len(text) > 1:
-                title = text[0]
-                content = '\n'.join(text[1:])
-                token_ids, segment_ids = tokenizer.encode(
-                    content, title, maxlen=maxlen
-                )
-                batch_token_ids.append(token_ids)
-                batch_segment_ids.append(segment_ids)
-            if len(batch_token_ids) == self.batch_size or is_end:
-                batch_token_ids = sequence_padding(batch_token_ids)
-                batch_segment_ids = sequence_padding(batch_segment_ids)
-                yield [batch_token_ids, batch_segment_ids], None
-                batch_token_ids, batch_segment_ids = [], []
+bert_dir = '/Users/connolly/Documents/Study/Useful dataset/chinese_L-12_H-768_A-12'
+config_path = bert_dir + '/bert_config.json'
+checkpoint_path = bert_dir + '/bert_model.ckpt'
+dict_path = bert_dir + '/vocab.txt'
+# checkpoint_path = '../bert_model.ckpt'
+# dict_path = '../vocab.txt'
 
 
 hparams = prepare_hparams(yaml_file, wordEmb_file=wordEmb_file, wordDict_file=wordDict_file,
@@ -125,7 +73,7 @@ model = NRMSModel(hparams, iterator, seed=seed)
 print(model.model.summary())
 
 # from tensorflow.keras.utils import plot_model
-# plot_model(model.model, to_file='model.png',show_shapes=True,show_layer_names=True)
+# plot_model(model.scorer, to_file='scorer.png',show_shapes=True,show_layer_names=True,expand_nested=True)
 
 # 读取模型再接着训练看看性能会不会再好一点
 # model_path = os.path.join(data_path, "model")
