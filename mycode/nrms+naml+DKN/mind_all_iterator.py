@@ -1,47 +1,17 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
+import tensorflow as tf
+import numpy as np
 import pickle
 
-import numpy as np
-import tensorflow as tf
-from bert4keras.snippets import DataGenerator, AutoRegressiveDecoder
-from bert4keras.tokenizers import Tokenizer, load_vocab
-from bert4keras.snippets import sequence_padding, to_array
-from iterator import BaseIterator
-from newsrec_utils import word_tokenize, newsample
+from reco_utils.recommender.deeprec.io.iterator import BaseIterator
+from reco_utils.recommender.newsrec.newsrec_utils import word_tokenize, newsample
 
-__all__ = ["MINDIterator"]
-
-# dict_path = '/vocab.txt'
-dict_path = '/Users/connolly/Documents/Study/Useful dataset/chinese_L-12_H-768_A-12/vocab.txt'
-maxlen = 256
-batch_size = 16
-tokenizer = Tokenizer(dict_path, do_lower_case=True)
+__all__ = ["MINDAllIterator"]
 
 
-# class data_generator(DataGenerator):
-#     """数据生成器
-#     """
-#
-#     def __iter__(self, random=False):
-#         batch_token_ids, batch_segment_ids, batch_labels = [], [], []
-#         for is_end, (text, label) in self.sample(random):
-#             token_ids, segment_ids = tokenizer.encode(text, maxlen=maxlen)
-#             token_ids, segment_ids = to_array([token_ids,segment_ids])
-#
-#             batch_token_ids.append(token_ids)
-#             batch_segment_ids.append(segment_ids)
-#             batch_labels.append([label])
-#             if len(batch_token_ids) == self.batch_size or is_end:
-#                 batch_token_ids = sequence_padding(batch_token_ids)
-#                 batch_segment_ids = sequence_padding(batch_segment_ids)
-#                 batch_labels = sequence_padding(batch_labels)
-#                 yield [batch_token_ids, batch_segment_ids], batch_labels
-#                 batch_token_ids, batch_segment_ids, batch_labels = [], [], []
-
-
-class MINDIterator(BaseIterator):
+class MINDAllIterator(BaseIterator):
     """Train data loader for NAML model.
     The model require a special type of data format, where each instance contains a label, impresion id, user id,
     the candidate news articles and user's clicked news article. Articles are represented by title words,
@@ -55,34 +25,34 @@ class MINDIterator(BaseIterator):
         ID_spliter (str): ID spliter in one line.
         batch_size (int): the samples num in one batch.
         title_size (int): max word num in news title.
+        body_size (int): max word num in news body (abstract used in MIND).
         his_size (int): max clicked news num in user click history.
         npratio (int): negaive and positive ratio used in negative sampling. -1 means no need of negtive sampling.
     """
 
     def __init__(
-            self, hparams, npratio=-1, col_spliter="\t", ID_spliter="%",
+        self, hparams, npratio=-1, col_spliter="\t", ID_spliter="%",
     ):
         """Initialize an iterator. Create necessary placeholders for the model.
         
         Args:
             hparams (obj): Global hyper-parameters. Some key setttings such as head_num and head_dim are there.
-            npratio (int): negaive and positive ratio used in negative sampling. -1 means no need of negtive sampling.
+            graph (obj): the running graph. All created placeholder will be added to this graph.
             col_spliter (str): column spliter in one line.
             ID_spliter (str): ID spliter in one line.
         """
         self.col_spliter = col_spliter
         self.ID_spliter = ID_spliter
-        self.batch_size = hparams['batch_size']
-        self.title_size = hparams['title_size']
-        self.body_size = hparams['body_size']
-        self.his_size = hparams['his_size']
+        self.batch_size = hparams.batch_size
+        self.title_size = hparams.title_size
+        self.body_size = hparams.body_size
+        self.his_size = hparams.his_size
         self.npratio = npratio
 
-        self.word_dict = self.load_dict(hparams['wordDict_file'])
-        self.vert_dict = self.load_dict(hparams['vertDict_file'])
-        self.subvert_dict = self.load_dict(hparams['subvertDict_file'])
-        self.entity_dict = self.load_dict(hparams['entityDict_file'])
-        self.uid2index = self.load_dict(hparams['userDict_file'])
+        self.word_dict = self.load_dict(hparams.wordDict_file)
+        self.vert_dict = self.load_dict(hparams.vertDict_file)
+        self.subvert_dict = self.load_dict(hparams.subvertDict_file)
+        self.uid2index = self.load_dict(hparams.userDict_file)
 
     def load_dict(self, file_path):
         """ load pickle file
@@ -96,20 +66,19 @@ class MINDIterator(BaseIterator):
             return pickle.load(f)
 
     def init_news(self, news_file):
-        """ init news information given news file, such as news_title_index and nid2index.
+        """ init news information given news file, such as news_title_index, news_abstract_index.
         Args:
             news_file: path of news file
         """
-
         self.nid2index = {}
         news_title = [""]
         news_ab = [""]
         news_vert = [""]
         news_subvert = [""]
-        title_entities = [""]  # every line in it: format like ['Q1', 'Q2', 'Q3']
+
         with tf.io.gfile.GFile(news_file, "r") as rd:
             for line in rd:
-                nid, vert, subvert, title, ab, url, title_entity, ab_entity = line.strip("\n").split(
+                nid, vert, subvert, title, ab, url, _, _ = line.strip("\n").split(
                     self.col_spliter
                 )
 
@@ -117,24 +86,14 @@ class MINDIterator(BaseIterator):
                     continue
 
                 self.nid2index[nid] = len(self.nid2index) + 1
-                # title = word_tokenize(title) # TODO 提取出所有的单词，可能还要改
+                title = word_tokenize(title)
+                ab = word_tokenize(ab)
                 news_title.append(title)
                 news_ab.append(ab)
                 news_vert.append(vert)
                 news_subvert.append(subvert)
 
-                entities = []
-                title_entity = eval(title_entity)
-                for dic in title_entity:
-                    entities.append(dic['WikidataId'])
-                title_entities.append(entities)
-
         self.news_title_index = np.zeros(
-            (len(news_title), self.title_size), dtype="int32"
-        )
-
-        # LP code for bert tokenizer
-        self.news_title_segment = np.zeros(
             (len(news_title), self.title_size), dtype="int32"
         )
 
@@ -142,54 +101,27 @@ class MINDIterator(BaseIterator):
         self.news_vert_index = np.zeros((len(news_vert), 1), dtype="int32")
         self.news_subvert_index = np.zeros((len(news_subvert), 1), dtype="int32")
 
-        # LP code for title_entity data extraction
-        self.title_entity_index = np.zeros(
-            (len(title_entities), self.title_size), dtype="int32"
-        )
         for news_index in range(len(news_title)):
             title = news_title[news_index]
-            token_ids, segment_ids = tokenizer.encode(title, maxlen=self.title_size + 2)
-            token_ids = token_ids[1:-1]
-            segment_ids = segment_ids[1:-1]
-
-            ab_token, ab_segment = tokenizer.encode(ab, maxlen=self.body_size + 2)
-            ab_token = ab_token[1:-1]
-
-            if len(token_ids) > self.title_size:
-                self.news_title_index[news_index] = token_ids[:self.title_size]  # TODO 可能会有bug吗 (最大长度的问题）
-                self.news_title_segment[news_index] = segment_ids[:self.title_size]
-            else:
-                self.news_title_index[news_index, :len(token_ids)] = token_ids
-                self.news_title_segment[news_index, :len(token_ids)] = segment_ids
-
-            if len(ab_token) > self.body_size:
-                self.news_ab_index[news_index] = token_ids[:self.body_size]  # TODO 可能会有bug吗 (最大长度的问题）
-            else:
-                self.news_ab_index[news_index, :len(token_ids)] = token_ids
-
+            ab = news_ab[news_index]
+            vert = news_vert[news_index]
+            subvert = news_subvert[news_index]
+            for word_index in range(min(self.title_size, len(title))):
+                if title[word_index] in self.word_dict:
+                    self.news_title_index[news_index, word_index] = self.word_dict[
+                        title[word_index].lower()
+                    ]
+            for word_index_ab in range(min(self.body_size, len(ab))):
+                if ab[word_index_ab] in self.word_dict:
+                    self.news_ab_index[news_index, word_index_ab] = self.word_dict[
+                        ab[word_index_ab].lower()
+                    ]
             if vert in self.vert_dict:
                 self.news_vert_index[news_index, 0] = self.vert_dict[vert]
             if subvert in self.subvert_dict:
                 self.news_subvert_index[news_index, 0] = self.subvert_dict[subvert]
 
-        # for news_index in range(len(news_title)):
-        #     title = news_title[news_index]
-        #     for word_index in range(min(self.title_size, len(title))):
-        #         if title[word_index] in self.word_dict:
-        #             self.news_title_index[news_index, word_index] = self.word_dict[
-        #                 title[word_index].lower()
-        #             ]
-
-        for news_index in range(len(title_entities)):
-            entities = title_entities[news_index]  # entities of the i_th news
-            for entity_index in range(min(self.title_size, len(entities))):
-                if entities[entity_index] in self.entity_dict:
-                    # forming news entity matrix
-                    self.title_entity_index[news_index, entity_index] = self.entity_dict[
-                        entities[entity_index]
-                    ]
-
-    def init_behaviors(self, behaviors_file, test=False):
+    def init_behaviors(self, behaviors_file):
         """ init behavior logs given behaviors file.
 
         Args:
@@ -208,14 +140,11 @@ class MINDIterator(BaseIterator):
 
                 history = [self.nid2index[i] for i in history.split()]
                 history = [0] * (self.his_size - len(history)) + history[
-                                                                 : self.his_size
-                                                                 ]
+                    : self.his_size
+                ]
 
                 impr_news = [self.nid2index[i.split("-")[0]] for i in impr.split()]
-                if not test:
-                    label = [int(i.split("-")[1]) for i in impr.split()]
-                else:
-                    label = [1 for i in impr.split()]
+                label = [int(i.split("-")[1]) for i in impr.split()]
                 uindex = self.uid2index[uid] if uid in self.uid2index else 0
 
                 self.histories.append(history)
@@ -226,17 +155,18 @@ class MINDIterator(BaseIterator):
                 impr_index += 1
 
     def parser_one_line(self, line):
-        """Parse one behavior sample into feature values.
-        if npratio is larger than 0, return negtive sampled result.
+        """Parse one string line into feature values.
         
         Args:
-            line (int): sample index.
+            line (str): a string indicating one instance.
 
         Returns:
             list: Parsed results including label, impression id , user id, 
-            candidate_title_index, clicked_title_index.
+            candidate_title_index, clicked_title_index, 
+            candidate_ab_index, clicked_ab_index,
+            candidate_vert_index, clicked_vert_index,
+            candidate_subvert_index, clicked_subvert_index,
         """
-
         if self.npratio > 0:
             impr_label = self.labels[line]
             impr = self.imprs[line]
@@ -252,21 +182,16 @@ class MINDIterator(BaseIterator):
 
             for p in poss:
                 candidate_title_index = []
-                candidate_title_segment = []
                 impr_index = []
                 user_index = []
                 label = [1] + [0] * self.npratio
 
                 n = newsample(negs, self.npratio)
                 candidate_title_index = self.news_title_index[[p] + n]
-                candidate_title_segment = self.news_title_segment[[p] + n]  # LP add
-                candidate_title_entity_index = self.title_entity_index[[p] + n]  # LP add
                 candidate_ab_index = self.news_ab_index[[p] + n]
                 candidate_vert_index = self.news_vert_index[[p] + n]
                 candidate_subvert_index = self.news_subvert_index[[p] + n]
                 click_title_index = self.news_title_index[self.histories[line]]
-                click_title_segment = self.news_title_segment[self.histories[line]]  # LP add
-                click_title_entity_index = self.title_entity_index[self.histories[line]]  # LP add
                 click_ab_index = self.news_ab_index[self.histories[line]]
                 click_vert_index = self.news_vert_index[self.histories[line]]
                 click_subvert_index = self.news_subvert_index[self.histories[line]]
@@ -278,78 +203,62 @@ class MINDIterator(BaseIterator):
                     impr_index,
                     user_index,
                     candidate_title_index,
-                    candidate_title_segment,
                     candidate_ab_index,
                     candidate_vert_index,
                     candidate_subvert_index,
-                    candidate_title_entity_index,
                     click_title_index,
-                    click_title_segment,
                     click_ab_index,
                     click_vert_index,
                     click_subvert_index,
-                    click_title_entity_index,
                 )
-        else:  # TODO 这一部分可以先不管了
+
+        else:
             impr_label = self.labels[line]
             impr = self.imprs[line]
 
             for news, label in zip(impr, impr_label):
                 candidate_title_index = []
-                candidate_title_segment = []
-                candidate_ab_index = []
-                candidate_vert_index = []
-                candidate_subvert_index = []
-                candidate_title_entity_index = []
                 impr_index = []
                 user_index = []
                 label = [label]
 
-                impr_index.append(self.impr_indexes[line])
-                user_index.append(self.uindexes[line])
-
                 candidate_title_index.append(self.news_title_index[news])
-                candidate_title_segment.append(self.news_title_segment[news])
-                candidate_title_entity_index.append(self.title_entity_index[news])  # LP add
-                candidate_ab_index.append(self.news_ab_index[news])
-                candidate_vert_index.append(self.news_vert_index[news])
-                candidate_subvert_index.append(self.news_subvert_index[news])
-
                 click_title_index = self.news_title_index[self.histories[line]]
-                click_title_segment = self.news_title_segment[self.histories[line]]
-                click_title_entity_index = self.title_entity_index[self.histories[line]]  # LP add
+
+                candidate_title_index = self.news_title_index[news]
+                candidate_ab_index = self.news_ab_index[news]
+                candidate_vert_index = self.news_vert_index[news]
+                candidate_subvert_index = self.news_subvert_index[news]
+                click_title_index = self.news_title_index[self.histories[line]]
                 click_ab_index = self.news_ab_index[self.histories[line]]
                 click_vert_index = self.news_vert_index[self.histories[line]]
                 click_subvert_index = self.news_subvert_index[self.histories[line]]
-
+                impr_index.append(self.impr_indexes[line])
+                user_index.append(self.uindexes[line])
 
                 yield (
                     label,
                     impr_index,
                     user_index,
                     candidate_title_index,
-                    candidate_title_segment,
                     candidate_ab_index,
                     candidate_vert_index,
                     candidate_subvert_index,
-                    candidate_title_entity_index,
                     click_title_index,
-                    click_title_segment,
                     click_ab_index,
                     click_vert_index,
                     click_subvert_index,
-                    click_title_entity_index,
                 )
 
     def load_data_from_file(self, news_file, behavior_file):
-        """Read and parse data from news file and behavior file.
-
+        """Read and parse data from a file.
+        
         Args:
             news_file (str): A file contains several informations of news.
             beahaviros_file (str): A file contains information of user impressions.
 
         Returns:
-            obj: An iterator that will yields parsed results, in the format of dict.
+            obj: An iterator that will yields parsed results, in the format of graph feed_dict.
         """
 
         if not hasattr(self, "news_title_index"):
@@ -362,18 +271,13 @@ class MINDIterator(BaseIterator):
         imp_indexes = []
         user_indexes = []
         candidate_title_indexes = []
-        candidate_title_segments = []
         candidate_ab_indexes = []
         candidate_vert_indexes = []
         candidate_subvert_indexes = []
-        candidate_title_entity_indexes = []
-
         click_title_indexes = []
-        click_title_segments = []
         click_ab_indexes = []
         click_vert_indexes = []
         click_subvert_indexes = []
-        click_title_entity_indexes = []
         cnt = 0
 
         indexes = np.arange(len(self.labels))
@@ -383,38 +287,29 @@ class MINDIterator(BaseIterator):
 
         for index in indexes:
             for (
-                    label,
-                    impr_index,
-                    user_index,
-                    candidate_title_index,
-                    candidate_title_segment,
-                    candidate_ab_index,
-                    candidate_vert_index,
-                    candidate_subvert_index,
-                    candidate_title_entity_index,
-                    click_title_index,
-                    click_title_segment,
-                    click_ab_index,
-                    click_vert_index,
-                    click_subvert_index,
-                    click_title_entity_index,
+                label,
+                impr_index,
+                user_index,
+                candidate_title_index,
+                candidate_ab_index,
+                candidate_vert_index,
+                candidate_subvert_index,
+                click_title_index,
+                click_ab_index,
+                click_vert_index,
+                click_subvert_index,
             ) in self.parser_one_line(index):
                 candidate_title_indexes.append(candidate_title_index)
-                candidate_title_segments.append(candidate_title_segment)  # LP add
-                click_title_indexes.append(click_title_index)
-                click_title_segments.append(click_title_segment)  # LP add
-                imp_indexes.append(impr_index)
-                user_indexes.append(user_index)
-                label_list.append(label)
-                candidate_title_entity_indexes.append(candidate_title_entity_index)  # LP add
-                click_title_entity_indexes.append(click_title_entity_index)  # LP add
-
                 candidate_ab_indexes.append(candidate_ab_index)
                 candidate_vert_indexes.append(candidate_vert_index)
                 candidate_subvert_indexes.append(candidate_subvert_index)
+                click_title_indexes.append(click_title_index)
                 click_ab_indexes.append(click_ab_index)
                 click_vert_indexes.append(click_vert_index)
                 click_subvert_indexes.append(click_subvert_index)
+                imp_indexes.append(impr_index)
+                user_indexes.append(user_index)
+                label_list.append(label)
 
                 cnt += 1
                 if cnt >= self.batch_size:
@@ -423,81 +318,56 @@ class MINDIterator(BaseIterator):
                         imp_indexes,
                         user_indexes,
                         candidate_title_indexes,
-                        candidate_title_segments,
                         candidate_ab_indexes,
                         candidate_vert_indexes,
                         candidate_subvert_indexes,
-                        candidate_title_entity_indexes,  # LP add
                         click_title_indexes,
-                        click_title_segments,
                         click_ab_indexes,
                         click_vert_indexes,
                         click_subvert_indexes,
-                        click_title_entity_indexes,  # LP add
                     )
                     label_list = []
                     imp_indexes = []
                     user_indexes = []
                     candidate_title_indexes = []
-                    click_title_indexes = []
-                    candidate_title_segments = []
-                    click_title_segments = []
-                    candidate_title_entity_indexes = []
-                    click_title_entity_indexes = []
                     candidate_ab_indexes = []
                     candidate_vert_indexes = []
                     candidate_subvert_indexes = []
+                    click_title_indexes = []
                     click_ab_indexes = []
                     click_vert_indexes = []
                     click_subvert_indexes = []
                     cnt = 0
 
-        if cnt > 0:
-            yield self._convert_data(
-                label_list,
-                imp_indexes,
-                user_indexes,
-                candidate_title_indexes,
-                candidate_title_segments,
-                candidate_ab_indexes,
-                candidate_vert_indexes,
-                candidate_subvert_indexes,
-                candidate_title_entity_indexes,  # LP add
-                click_title_indexes,
-                click_title_segments,
-                click_ab_indexes,
-                click_vert_indexes,
-                click_subvert_indexes,
-                click_title_entity_indexes,  # LP add
-            )
-
     def _convert_data(
-            self,
-            label_list,
-            imp_indexes,
-            user_indexes,
-            candidate_title_indexes,
-            candidate_title_segments,
-            candidate_ab_indexes,
-            candidate_vert_indexes,
-            candidate_subvert_indexes,
-            candidate_title_entity_indexes,  # LP add
-            click_title_indexes,
-            click_title_segments,
-            click_ab_indexes,
-            click_vert_indexes,
-            click_subvert_indexes,
-            click_title_entity_indexes,  # LP add
+        self,
+        label_list,
+        imp_indexes,
+        user_indexes,
+        candidate_title_indexes,
+        candidate_ab_indexes,
+        candidate_vert_indexes,
+        candidate_subvert_indexes,
+        click_title_indexes,
+        click_ab_indexes,
+        click_vert_indexes,
+        click_subvert_indexes,
     ):
         """Convert data into numpy arrays that are good for further model operation.
-
+        
         Args:
             label_list (list): a list of ground-truth labels.
             imp_indexes (list): a list of impression indexes.
             user_indexes (list): a list of user indexes.
             candidate_title_indexes (list): the candidate news titles' words indices.
+            candidate_ab_indexes (list): the candidate news abstarcts' words indices.
+            candidate_vert_indexes (list): the candidate news verts' words indices.
+            candidate_subvert_indexes (list): the candidate news subverts' indices.
             click_title_indexes (list): words indices for user's clicked news titles.
-
+            click_ab_indexes (list): words indices for user's clicked news abstarcts.
+            click_vert_indexes (list): indices for user's clicked news verts.
+            click_subvert_indexes (list):indices for user's clicked news subverts.
+            
         Returns:
             dict: A dictionary, contains multiple numpy arrays that are convenient for further operation.
         """
@@ -508,49 +378,32 @@ class MINDIterator(BaseIterator):
         candidate_title_index_batch = np.asarray(
             candidate_title_indexes, dtype=np.int64
         )
-        candidate_title_segment_batch = np.asarray(
-            candidate_title_segments, dtype=np.int64  # LP add
-        )
-
-        click_title_index_batch = np.asarray(click_title_indexes, dtype=np.int64)
-        click_title_segment_batch = np.asarray(click_title_segments, dtype=np.int64)  # LP add
-
-        candidate_title_entity_index_batch = np.asarray(
-            candidate_title_entity_indexes, dtype=np.int64
-        )
-        click_title_entity_index_batch = np.asarray(click_title_entity_indexes, dtype=np.int64)
         candidate_ab_index_batch = np.asarray(candidate_ab_indexes, dtype=np.int64)
         candidate_vert_index_batch = np.asarray(candidate_vert_indexes, dtype=np.int64)
         candidate_subvert_index_batch = np.asarray(
             candidate_subvert_indexes, dtype=np.int64
         )
+        click_title_index_batch = np.asarray(click_title_indexes, dtype=np.int64)
         click_ab_index_batch = np.asarray(click_ab_indexes, dtype=np.int64)
         click_vert_index_batch = np.asarray(click_vert_indexes, dtype=np.int64)
         click_subvert_index_batch = np.asarray(click_subvert_indexes, dtype=np.int64)
         return {
             "impression_index_batch": imp_indexes,
             "user_index_batch": user_indexes,
-
-            "candidate_title_batch": candidate_title_index_batch,
-            "candidate_title_segment_batch": candidate_title_segment_batch,  # LP
-            "candidate_ab_batch": candidate_ab_index_batch,
-            "candidate_vert_batch": candidate_vert_index_batch,
-            "candidate_subvert_batch": candidate_subvert_index_batch,
-            "candidate_title_entity_batch": candidate_title_entity_index_batch,
-
             "clicked_title_batch": click_title_index_batch,
-            "clicked_title_segment_batch": click_title_segment_batch,  # LP
-            "clicked_title_entity_batch": click_title_entity_index_batch,
             "clicked_ab_batch": click_ab_index_batch,
             "clicked_vert_batch": click_vert_index_batch,
             "clicked_subvert_batch": click_subvert_index_batch,
-
+            "candidate_title_batch": candidate_title_index_batch,
+            "candidate_ab_batch": candidate_ab_index_batch,
+            "candidate_vert_batch": candidate_vert_index_batch,
+            "candidate_subvert_batch": candidate_subvert_index_batch,
             "labels": labels,
         }
 
-    def load_user_from_file(self, news_file, behavior_file, test):
+    def load_user_from_file(self, news_file, behavior_file):
         """Read and parse user data from news file and behavior file.
-
+        
         Args:
             news_file (str): A file contains several informations of news.
             beahaviros_file (str): A file contains information of user impressions.
@@ -563,23 +416,18 @@ class MINDIterator(BaseIterator):
             self.init_news(news_file)
 
         if not hasattr(self, "impr_indexes"):
-            self.init_behaviors(behavior_file, test)
+            self.init_behaviors(behavior_file)
 
         user_indexes = []
         impr_indexes = []
         click_title_indexes = []
-        click_title_segments = []  # LP
-        click_title_entity_indexes = []
         click_ab_indexes = []
         click_vert_indexes = []
         click_subvert_indexes = []
         cnt = 0
-        # TODO 这里也要添加segment哦
+
         for index in range(len(self.impr_indexes)):
             click_title_indexes.append(self.news_title_index[self.histories[index]])
-            click_title_segments.append(self.news_title_segment[self.histories[index]])  # LP add
-
-            click_title_entity_indexes.append(self.title_entity_index[self.histories[index]])
             click_ab_indexes.append(self.news_ab_index[self.histories[index]])
             click_vert_indexes.append(self.news_vert_index[self.histories[index]])
             click_subvert_indexes.append(self.news_subvert_index[self.histories[index]])
@@ -592,8 +440,6 @@ class MINDIterator(BaseIterator):
                     user_indexes,
                     impr_indexes,
                     click_title_indexes,
-                    click_title_segments,
-                    click_title_entity_indexes,
                     click_ab_indexes,
                     click_vert_indexes,
                     click_subvert_indexes,
@@ -601,40 +447,27 @@ class MINDIterator(BaseIterator):
                 user_indexes = []
                 impr_indexes = []
                 click_title_indexes = []
-                click_title_entity_indexes = []
-                click_title_segments = []  # LP
                 click_ab_indexes = []
                 click_vert_indexes = []
                 click_subvert_indexes = []
-                cnt = 0
-
-        if cnt > 0:
-            yield self._convert_user_data(
-                user_indexes,
-                impr_indexes,
-                click_title_indexes,
-                click_title_segments,
-                click_title_entity_indexes,
-                click_ab_indexes,
-                click_vert_indexes,
-                click_subvert_indexes,
-            )
 
     def _convert_user_data(
-            self, user_indexes,
-            impr_indexes,
-            click_title_indexes,
-            click_title_segments,
-            click_title_entity_indexes,
-            click_ab_indexes,
-            click_vert_indexes,
-            click_subvert_indexes,
+        self,
+        user_indexes,
+        impr_indexes,
+        click_title_indexes,
+        click_ab_indexes,
+        click_vert_indexes,
+        click_subvert_indexes,
     ):
         """Convert data into numpy arrays that are good for further model operation.
-
+        
         Args:
             user_indexes (list): a list of user indexes.
             click_title_indexes (list): words indices for user's clicked news titles.
+            click_ab_indexes (list): words indices for user's clicked news abs.
+            click_vert_indexes (list): words indices for user's clicked news verts.
+            click_subvert_indexes (list): words indices for user's clicked news subverts.
 
         Returns:
             dict: A dictionary, contains multiple numpy arrays that are convenient for further operation.
@@ -643,17 +476,14 @@ class MINDIterator(BaseIterator):
         user_indexes = np.asarray(user_indexes, dtype=np.int32)
         impr_indexes = np.asarray(impr_indexes, dtype=np.int32)
         click_title_index_batch = np.asarray(click_title_indexes, dtype=np.int64)
-        click_title_segment_batch = np.asarray(click_title_segments, dtype=np.int64)
-        click_title_entity_indexes = np.asarray(click_title_entity_indexes, dtype=np.int64)
         click_ab_index_batch = np.asarray(click_ab_indexes, dtype=np.int64)
         click_vert_index_batch = np.asarray(click_vert_indexes, dtype=np.int64)
         click_subvert_index_batch = np.asarray(click_subvert_indexes, dtype=np.int64)
+
         return {
             "user_index_batch": user_indexes,
             "impr_index_batch": impr_indexes,
             "clicked_title_batch": click_title_index_batch,
-            "clicked_title_segment_batch": click_title_segment_batch,
-            "clicked_title_entity_batch": click_title_entity_indexes,
             "clicked_ab_batch": click_ab_index_batch,
             "clicked_vert_batch": click_vert_index_batch,
             "clicked_subvert_batch": click_subvert_index_batch,
@@ -661,10 +491,10 @@ class MINDIterator(BaseIterator):
 
     def load_news_from_file(self, news_file):
         """Read and parse user data from news file.
-
+        
         Args:
             news_file (str): A file contains several informations of news.
-
+            
         Returns:
             obj: An iterator that will yields parsed news feature, in the format of dict.
         """
@@ -673,19 +503,14 @@ class MINDIterator(BaseIterator):
 
         news_indexes = []
         candidate_title_indexes = []
-        candidate_title_segments = []
-        candidate_title_entity_indexes = []
         candidate_ab_indexes = []
         candidate_vert_indexes = []
         candidate_subvert_indexes = []
-
         cnt = 0
-        # LP 加入entity
+
         for index in range(len(self.news_title_index)):
             news_indexes.append(index)
             candidate_title_indexes.append(self.news_title_index[index])
-            candidate_title_segments.append(self.news_title_segment[index])
-            candidate_title_entity_indexes.append(self.title_entity_index[index])
             candidate_ab_indexes.append(self.news_ab_index[index])
             candidate_vert_indexes.append(self.news_vert_index[index])
             candidate_subvert_indexes.append(self.news_subvert_index[index])
@@ -695,47 +520,33 @@ class MINDIterator(BaseIterator):
                 yield self._convert_news_data(
                     news_indexes,
                     candidate_title_indexes,
-                    candidate_title_segments,
-                    candidate_title_entity_indexes,
                     candidate_ab_indexes,
                     candidate_vert_indexes,
                     candidate_subvert_indexes,
                 )
                 news_indexes = []
                 candidate_title_indexes = []
-                candidate_title_segments = []
-                candidate_title_entity_indexes = []
                 candidate_ab_indexes = []
                 candidate_vert_indexes = []
                 candidate_subvert_indexes = []
-                cnt = 0
-
-        if cnt > 0:
-            yield self._convert_news_data(
-                news_indexes,
-                candidate_title_indexes,
-                candidate_title_segments,
-                candidate_title_entity_indexes,
-                candidate_ab_indexes,
-                candidate_vert_indexes,
-                candidate_subvert_indexes,
-            )
 
     def _convert_news_data(
-            self, news_indexes,
-            candidate_title_indexes,
-            candidate_title_segments,
-            candidate_title_entity_indexes,
-            candidate_ab_indexes,
-            candidate_vert_indexes,
-            candidate_subvert_indexes,
+        self,
+        news_indexes,
+        candidate_title_indexes,
+        candidate_ab_indexes,
+        candidate_vert_indexes,
+        candidate_subvert_indexes,
     ):
         """Convert data into numpy arrays that are good for further model operation.
-
+        
         Args:
             news_indexes (list): a list of news indexes.
             candidate_title_indexes (list): the candidate news titles' words indices.
-
+            candidate_ab_indexes (list): the candidate news abstarcts' words indices.
+            candidate_vert_indexes (list): the candidate news verts' words indices.
+            candidate_subvert_indexes (list): the candidate news subverts' words indices.
+            
         Returns:
             dict: A dictionary, contains multiple numpy arrays that are convenient for further operation.
         """
@@ -744,64 +555,32 @@ class MINDIterator(BaseIterator):
         candidate_title_index_batch = np.asarray(
             candidate_title_indexes, dtype=np.int32
         )
-        candidate_title_segment_batch = np.asarray(
-            candidate_title_segments, dtype=np.int32
-        )
-        candidate_title_entity_index_batch = np.asarray(
-            candidate_title_entity_indexes, dtype=np.int32
-        )
         candidate_ab_index_batch = np.asarray(candidate_ab_indexes, dtype=np.int32)
         candidate_vert_index_batch = np.asarray(candidate_vert_indexes, dtype=np.int32)
         candidate_subvert_index_batch = np.asarray(
             candidate_subvert_indexes, dtype=np.int32
         )
+
         return {
             "news_index_batch": news_indexes_batch,
             "candidate_title_batch": candidate_title_index_batch,
-            "candidate_title_segment_batch": candidate_title_segment_batch,
-            "candidate_title_entity_batch": candidate_title_entity_index_batch,
             "candidate_ab_batch": candidate_ab_index_batch,
             "candidate_vert_batch": candidate_vert_index_batch,
             "candidate_subvert_batch": candidate_subvert_index_batch,
         }
 
-    def load_impression_from_file(self, behaivors_file, test=0):
+    def load_impression_from_file(self, behaivors_file):
         """Read and parse impression data from behaivors file.
-
+        
         Args:
             behaivors_file (str): A file contains several informations of behaviros.
-
+            
         Returns:
             obj: An iterator that will yields parsed impression data, in the format of dict.
         """
-        if not test:
-            if not hasattr(self, "histories"):
-                self.init_behaviors(behaivors_file)
-        else:
-            self.histories = []
-            self.imprs = []
-            self.labels = []
-            self.impr_indexes = []
-            self.uindexes = []
 
-            with tf.io.gfile.GFile(behaivors_file, "r") as rd:
-                impr_index = 0
-                for line in rd:
-                    uid, time, history, impr = line.strip("\n").split(self.col_spliter)[-4:]
-
-                    history = [self.nid2index[i] for i in history.split()]
-                    history = [0] * (self.his_size - len(history)) + history[
-                                                                     : self.his_size
-                                                                     ]
-
-                    impr_news = [self.nid2index[i.split("-")[0]] for i in impr.split()]
-                    uindex = self.uid2index[uid] if uid in self.uid2index else 0
-                    self.histories.append(history)
-                    self.imprs.append(impr_news)
-                    self.labels.append([1 for i in impr.split()])
-                    self.impr_indexes.append(impr_index)
-                    self.uindexes.append(uindex)
-                    impr_index += 1
+        if not hasattr(self, "histories"):
+            self.init_behaviors(behaivors_file)
 
         indexes = np.arange(len(self.labels))
 
@@ -815,3 +594,4 @@ class MINDIterator(BaseIterator):
                 self.uindexes[index],
                 impr_label,
             )
+

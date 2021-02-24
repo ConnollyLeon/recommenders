@@ -197,7 +197,6 @@ class BaseModel:
             )
 
             for batch_data_input in tqdm_util:
-                print('fuck')
                 step_result = self.train(batch_data_input)
                 step_data_loss = step_result
 

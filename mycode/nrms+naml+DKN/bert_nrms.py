@@ -1,6 +1,6 @@
 import sys
 
-from nrms import NRMSModel
+from mymodel import NRMSModel
 
 from newsrec_utils import prepare_hparams
 from mind_iterator import MINDIterator
@@ -26,12 +26,14 @@ valid_behaviors_file = os.path.join(data_path, 'valid', r'behaviors.tsv')
 wordEmb_file = os.path.join(data_path, "utils", "embedding_all.npy")
 userDict_file = os.path.join(data_path, "utils", "uid2index.pkl")
 wordDict_file = os.path.join(data_path, "utils", "word_dict_all.pkl")
+vertDict_file = os.path.join(data_path, "utils", "vert_dict.pkl")
+subvertDict_file = os.path.join(data_path, "utils", "subvert_dict.pkl")
 entityDict_file = os.path.join(data_path, "utils", "entity_dict_all.pkl")
-# entity_embedding_file = os.path.join(data_path, "utils", "entity_embeddings_5w_100_all.npy")
-# context_embedding_file = os.path.join(data_path, "utils", "context_embeddings_5w_100_all.npy")
-entity_embedding_file = None
-context_embedding_file = None
-yaml_file = os.path.join(data_path, "utils", r'nrms.yaml')
+entity_embedding_file = os.path.join(data_path, "utils", "entity_embeddings_5w_100_all.npy")
+context_embedding_file = os.path.join(data_path, "utils", "context_embeddings_5w_100_all.npy")
+# entity_embedding_file = None
+# context_embedding_file = None
+yaml_file = './nrms.yaml'
 
 # mind_url, mind_train_dataset, mind_dev_dataset, mind_utils = get_mind_data_set(MIND_type)
 #
@@ -58,6 +60,8 @@ dict_path = bert_dir + '/vocab.txt'
 
 hparams = prepare_hparams(yaml_file, wordEmb_file=wordEmb_file, wordDict_file=wordDict_file,
                           userDict_file=userDict_file, epochs=epochs, entityEmb_file=entity_embedding_file,
+                          vertDict_file=vertDict_file,
+                          subvertDict_file=subvertDict_file,
                           contextEmb_file=context_embedding_file,
                           entityDict_file=entityDict_file,
                           show_step=10,
